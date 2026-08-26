@@ -3,7 +3,7 @@
 ![Dataset](https://img.shields.io/badge/Dataset-GSE288139-green)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-# Entropy Age: A Dual-Stream Deep Learning Epigenetic Clock
+# A Dual-Stream Deep Learning Epigenetic Clock
 
 This repository contains the source code for a novel deep learning framework designed to model epigenetic aging. Unlike traditional epigenetic clocks that rely solely on single-point methylation averages (beta values), this model simultaneously learns from **mean methylation** and stochastic **epigenetic noise (Shannon pattern entropy)** to predict chronological age.
 
@@ -39,7 +39,7 @@ Extracting the Gated Attention weights across the test cohort revealed a strikin
 
 ## Repository Structure
 ```text
-entropy_clock_V2/
+entropy_clock/
 ├── data/
 │   ├── raw/                # Raw read-level datasets (e.g., GSE288139)
 │   ├── processed/          # Cleaned, extracted feature tensors
@@ -53,7 +53,6 @@ entropy_clock_V2/
 │   └── train.py            # Gradient descent training loop with validation & Early Stopping
 ├── run_real.py             # Master orchestrator for real biological pipeline
 ├── run_synthetic.py        # Master orchestrator for synthetic pilot validation
-├── generate_readme.py      # Automated documentation generator
 ├── requirements.txt        # Python dependencies
 └── .gitignore
 ```
