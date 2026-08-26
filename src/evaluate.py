@@ -1,93 +1,123 @@
 import torch
+import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_error, r2_score
 from scipy.stats import pearsonr
-import shap
 import os
 
-def evaluate_model(model, X_test_tensor, y_test_tensor):
-    """
-    Evaluates the model on the held-out test set and calculates MAE and Pearson r.
-    """
+# ---------------------------------------------------------
+# EVALUATION, METRICS, & STREAM IMPORTANCE PIPELINE
+# ---------------------------------------------------------
+def evaluate_and_plot(model, test_loader, feature_names, plot_path="outputs/plot.png", shap_path="outputs/shap.png"):
     model.eval()
-    # Turn off the gradient tracker to save memory since we aren't training anymore
+    all_preds = []
+    all_targets = []
+    
+    # Track attention weights to measure stream importance
+    meth_weights_all = []
+    ent_weights_all = []
+    
+    os.makedirs(os.path.dirname(plot_path), exist_ok=True)
+    
+    print("[*] Running inference on test set and capturing attention weights...")
     with torch.no_grad():
-        predictions = model(X_test_tensor).squeeze().cpu().numpy()
+        for meth, ent, age in test_loader:
+            preds = model(meth, ent)
+            all_preds.extend(preds.numpy().flatten())
+            all_targets.extend(age.numpy().flatten())
+            
+            # --- Extract Gated Attention Weights Dynamically ---
+            m_out = model.meth_stream(meth)
+            e_out = model.ent_stream(ent)
+            combined = torch.cat([m_out, e_out], dim=1)
+            attn_weights = model.attention(combined)
+            
+            meth_weights_all.extend(attn_weights[:, 0].numpy())
+            ent_weights_all.extend(attn_weights[:, 1].numpy())
+            
+    all_preds = np.array(all_preds).reshape(-1, 1)
+    all_targets = np.array(all_targets).reshape(-1, 1)
     
-    actuals = y_test_tensor.squeeze().cpu().numpy()
+    # Inverse transform to get back to real years if scaler is attached
+    if hasattr(model, 'age_scaler'):
+        all_preds = model.age_scaler.inverse_transform(all_preds).flatten()
+        all_targets = model.age_scaler.inverse_transform(all_targets).flatten()
+    else:
+        all_preds = all_preds.flatten()
+        all_targets = all_targets.flatten()
     
-    # Calculate Mean Absolute Error (MAE)
-    mae = float(np.mean(np.abs(predictions - actuals)))
-    # Calculate Pearson correlation coefficient (r)
-    r, p_value = pearsonr(predictions, actuals)
+    # -------------------------
+    # METRICS CALCULATION
+    # -------------------------
+    mae = mean_absolute_error(all_targets, all_preds)
     
-    return {
-        "mae": mae, 
-        "pearson_r": r, 
-        "p_value": p_value, 
-        "predictions": predictions, 
-        "actuals": actuals
-    }
-
-def plot_predictions(metrics, output_dir="outputs"):
-    """
-    Generates a scatter plot of Predicted vs Actual ages.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    plt.figure(figsize=(8, 6))
-    
-    # Plot the individual patients
-    plt.scatter(metrics["actuals"], metrics["predictions"], alpha=0.7, color='#2b6cb0')
-    
-    # Plot the ideal 1:1 line (Perfect Prediction)
-    min_val = min(min(metrics["actuals"]), min(metrics["predictions"]))
-    max_val = max(max(metrics["actuals"]), max(metrics["predictions"]))
-    plt.plot([min_val, max_val], [min_val, max_val], 'r--', label="Perfect Prediction Line")
-    
-    plt.title(f"Predicted vs Actual Age\nMAE: {metrics['mae']:.2f} Years | Pearson r: {metrics['pearson_r']:.3f}")
-    plt.xlabel("Actual Chronological Age (Years)")
-    plt.ylabel("Predicted Biological Age (Years)")
-    plt.legend()
-    plt.grid(True, linestyle='--', alpha=0.5)
-    
-    save_path = os.path.join(output_dir, "predicted_vs_actual.png")
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"[*] Saved prediction plot to {save_path}")
-
-def generate_shap_explanations(model, X_train_tensor, X_test_tensor, feature_names, output_dir="outputs"):
-    """
-    Generates SHAP values using the training set as the background to explain the test set.
-    Uses GradientExplainer to properly handle the non-linear multiplicative Gated Fusion layer.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    model.eval()
-    
-    # 1. Use a random background sample from the training data
-    n_background = min(100, X_train_tensor.shape[0])
-    background_idx = np.random.choice(X_train_tensor.shape[0], size=n_background, replace=False)
-    background = X_train_tensor[background_idx]
-    
-    # 2. Initialize the GradientExplainer (Robust to Attention/Gating mechanisms)
-    explainer = shap.GradientExplainer(model, background)
-    
-    # 3. Calculate SHAP values for the unseen test set
-    print("Calculating SHAP values (this might take a moment)...")
-    shap_values = explainer.shap_values(X_test_tensor)
-    
-    # PyTorch GradientExplainer returns a list or tensor depending on version; handle extraction
-    if isinstance(shap_values, list):
-        shap_values = shap_values[0]
-    elif isinstance(shap_values, np.ndarray) and len(shap_values.shape) == 3:
-        # If shape is (samples, features, 1), squeeze the last dimension
-        shap_values = shap_values[:, :, 0]
+    if len(np.unique(all_preds)) > 1:
+        r, _ = pearsonr(all_targets, all_preds)
+    else:
+        r = 0.0
         
-    # 4. Generate and save the Summary Plot
-    import matplotlib.pyplot as plt
-    plt.figure(figsize=(10, 8))
-    shap.summary_plot(shap_values, X_test_tensor.cpu().numpy(), feature_names=feature_names, show=False)
+    r2 = r2_score(all_targets, all_preds)
     
-    save_path = os.path.join(output_dir, "shap_summary.png")
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print("\n======================================")
+    print("      FINAL MODEL PERFORMANCE")
+    print("======================================")
+    print(f"  Mean Absolute Error (MAE): {mae:.2f} years")
+    print(f"  Pearson Correlation (r):   {r:.3f}")
+    print(f"  R-Squared (R2):            {r2:.3f}")
+    print("======================================\n")
+    
+    # -------------------------
+    # REGRESSION PLOT
+    # -------------------------
+    plt.figure(figsize=(8, 6))
+    plt.scatter(all_targets, all_preds, alpha=0.7, color="#2c3e50", edgecolors='white', s=60)
+    
+    min_val = min(all_targets.min(), all_preds.min())
+    max_val = max(all_targets.max(), all_preds.max())
+    plt.plot([min_val, max_val], [min_val, max_val], 'r--', lw=2, label="Perfect Prediction")
+    
+    plt.xlabel("Actual Age (Years)", fontsize=12)
+    plt.ylabel("Predicted Age (Years)", fontsize=12)
+    plt.title(f"Dual-Stream Epigenetic Clock (MAE: {mae:.2f} yrs | r: {r:.2f})", fontsize=14)
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"[*] Saved SHAP summary plot to {save_path}")
+    print(f"[+] Regression plot saved to {plot_path}")
+    
+    # ---------------------------------------------------------
+    # STREAM IMPORTANCE BAR CHART (GATED ATTENTION ANALYSIS)
+    # ---------------------------------------------------------
+    print("[*] Generating Dual-Stream Attention Importance Chart...")
+    try:
+        avg_meth_weight = np.mean(meth_weights_all)
+        avg_ent_weight = np.mean(ent_weights_all)
+        
+        streams = ['Methylation Stream', 'Shannon Entropy Stream']
+        weights = [avg_meth_weight, avg_ent_weight]
+        colors = ['#3498db', '#e74c3c']
+        
+        plt.figure(figsize=(8, 6))
+        bars = plt.bar(streams, weights, color=colors, alpha=0.85, edgecolor='black', width=0.5)
+        
+        plt.ylabel("Mean Gated Attention Weight", fontsize=12)
+        plt.title("Dual-Stream Biomarker Contribution Analysis", fontsize=14, fontweight='bold')
+        plt.ylim(0, 1.0)
+        plt.grid(True, axis='y', alpha=0.3)
+        
+        # Add exact percentages on top of bars
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.03,
+                     f"{height * 100:.1f}%",
+                     ha='center', va='bottom', fontsize=12, fontweight='bold')
+            
+        plt.savefig(shap_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"[+] Stream importance plot saved to {shap_path}")
+        
+    except Exception as e:
+        print(f"\n[!] Warning: Stream importance plot failed. Error: {e}")
+        
+    print("\n[*] Pipeline complete!")

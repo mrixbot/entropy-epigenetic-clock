@@ -2,60 +2,63 @@ import torch
 import torch.nn as nn
 
 class DualStreamEntropyClockNet(nn.Module):
-    def __init__(self, n_features_per_stream, embed_dim=64, dropout=0.3):
-        super().__init__()
-        self.n_features_per_stream = n_features_per_stream
-
-        # Branch 1: Methylation Encoder
-        self.methylation_branch = nn.Sequential(
-            nn.Linear(n_features_per_stream, 128),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(dropout),
-            nn.Linear(128, embed_dim),
-            nn.LeakyReLU(0.2),
+    def __init__(self, input_dim):
+        # We now accept input_dim so the model scales to any dataset automatically
+        super(DualStreamEntropyClockNet, self).__init__()
+        
+        # 1. Methylation Stream
+        self.meth_stream = nn.Sequential(
+            nn.Linear(input_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 128),
+            nn.ReLU()
+        )
+        
+        # 2. Entropy Stream
+        self.ent_stream = nn.Sequential(
+            nn.Linear(input_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 128),
+            nn.ReLU()
+        )
+        
+        # 3. Late-Fusion Gated Attention Mechanism
+        # Learns which stream to trust more based on the patient
+        self.attention = nn.Sequential(
+            nn.Linear(256, 128), # 128 from meth + 128 from ent
+            nn.Tanh(),
+            nn.Linear(128, 2),   # 2 weights: one for meth, one for ent
+            nn.Softmax(dim=1)
+        )
+        
+        # 4. Final Regressor
+        self.regressor = nn.Sequential(
+            nn.Linear(128, 64),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(64, 1)
         )
 
-        # Branch 2: Entropy Encoder
-        self.entropy_branch = nn.Sequential(
-            nn.Linear(n_features_per_stream, 128),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(dropout),
-            nn.Linear(128, embed_dim),
-            nn.LeakyReLU(0.2),
-        )
-
-        # Gated Fusion Layer
-        # Takes the concatenated embeddings and calculates a fusion gate (0 to 1)
-        self.fusion_gate = nn.Sequential(
-            nn.Linear(embed_dim * 2, embed_dim),
-            nn.Sigmoid()
-        )
-
-        # Final Prediction Head
-        self.prediction_head = nn.Sequential(
-            nn.Linear(embed_dim, 32),
-            nn.LeakyReLU(0.2),
-            nn.Dropout(dropout * 0.7),
-            nn.Linear(32, 1),
-        )
-
-    def forward(self, x):
-        # 1. Split the inputs perfectly in half
-        meth = x[:, : self.n_features_per_stream]
-        entropy = x[:, self.n_features_per_stream :]
-
-        # 2. Get embeddings from both branches
-        meth_embed = self.methylation_branch(meth)
-        entropy_embed = self.entropy_branch(entropy)
-
-        # 3. Calculate the Gate (z)
-        # We concatenate them just to calculate the gating score
-        concat_embeds = torch.cat([meth_embed, entropy_embed], dim=1)
-        z = self.fusion_gate(concat_embeds)
-
-        # 4. Gated Fusion
-        # If z is close to 1, it favors methylation. If z is close to 0, it favors entropy.
-        fused_embed = (z * meth_embed) + ((1 - z) * entropy_embed)
-
-        # 5. Predict Age
-        return self.prediction_head(fused_embed)
+    def forward(self, meth, ent):
+        # Pass data through individual biological streams
+        m_out = self.meth_stream(meth)
+        e_out = self.ent_stream(ent)
+        
+        # Calculate attention weights dynamically
+        combined = torch.cat([m_out, e_out], dim=1)
+        attn_weights = self.attention(combined)
+        
+        # Split weights for each stream
+        w_m = attn_weights[:, 0].unsqueeze(1)
+        w_e = attn_weights[:, 1].unsqueeze(1)
+        
+        # Late Fusion: Weighted sum of both streams based on attention
+        fused = (m_out * w_m) + (e_out * w_e)
+        
+        # Predict Chronological Age
+        age_pred = self.regressor(fused)
+        return age_pred
