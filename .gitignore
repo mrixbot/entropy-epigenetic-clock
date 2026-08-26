@@ -1,0 +1,12 @@
+# Ignores the virtual environment
+venv/
+__pycache__/
+
+# Ignores biological datasets and trained models
+data/raw/
+data/processed/
+outputs/
+*.pt
+
+# System files
+.DS_Store
