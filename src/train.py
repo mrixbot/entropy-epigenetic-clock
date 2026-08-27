@@ -9,15 +9,8 @@ import copy
 def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, patience=15):
     """
     Trains the Dual-Stream network with Early Stopping to prevent overfitting.
-
-    CHANGED: the second argument is now val_loader, not test_loader. This
-    function was previously selecting "best" weights based on performance
-    on the SAME data later reported as the final test score -- meaning the
-    reported MAE was not a genuine held-out result. Pass your validation
-    split here; keep test_loader completely separate and only hand it to
-    evaluate_and_plot() after this function returns.
     """
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss(reduction='none')
     optimizer = optim.Adam(model.parameters(), lr=lr)
 
     best_val_mae = float('inf')
@@ -36,7 +29,20 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, patience=
         for meth, ent, age in train_loader:
             optimizer.zero_grad()
             predictions = model(meth, ent)
-            loss = criterion(predictions, age)
+            
+            # 1. Calculate unreduced MSE loss
+            base_loss = criterion(predictions, age)
+            
+            # 2. Dynamic weighting: Heavily penalize errors on outlier ages.
+            # NOTE (Bug 2 Fix/Note): 'age' here is standardized (z-scored), meaning values near 0 
+            # represent the mean age, while outliers sit around +/- 1.5 to 2.0 standard deviations. 
+            # This formula gives average ages a baseline weight multiplier of 1.0, 
+            # scaling up to ~5.0 for extreme outlier age groups.
+            weights = 1.0 + (torch.abs(age) * 2.0) 
+            
+            # 3. Apply weights and reduce
+            loss = (base_loss * weights).mean()
+            
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
