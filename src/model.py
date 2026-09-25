@@ -38,6 +38,7 @@ class DualStreamEntropyClockNet(nn.Module):
         # 4. Final Regressor
         self.regressor = nn.Sequential(
             nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(64, 1)
