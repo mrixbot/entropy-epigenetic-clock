@@ -5,42 +5,41 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error
 import copy
 
-
 def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, patience=15):
     """
-    Trains the Dual-Stream network with Early Stopping to prevent overfitting.
+    Trains the Dual-Stream network with Early Stopping and a dynamic Learning Rate Scheduler.
     """
     criterion = nn.MSELoss(reduction='none')
     optimizer = optim.Adam(model.parameters(), lr=lr)
-
+    
+    # 1. Initialize the scheduler
+    # Drops the learning rate by 70% if the validation MAE plateaus for 12 epochs
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.7, patience=12)
     best_val_mae = float('inf')
     best_weights = None
     epochs_without_improvement = 0
 
     print(f"[*] Starting Training Loop (Max {epochs} Epochs, Early Stopping Patience={patience})...")
-    print("-" * 65)
-    print(f"{'EPOCH':<10} | {'TRAIN LOSS':<15} | {'VAL MAE (YEARS)':<15} | {'STATUS'}")
-    print("-" * 65)
+    print("-" * 80)
+    print(f"{'EPOCH':<7} | {'LR':<10} | {'TRAIN LOSS':<12} | {'VAL MAE (YRS)':<15} | {'STATUS'}")
+    print("-" * 80)
 
     for epoch in range(epochs):
         model.train()
         train_losses = []
+        
+        # Track current learning rate for terminal output
+        current_lr = optimizer.param_groups[0]['lr']
 
         for meth, ent, age in train_loader:
             optimizer.zero_grad()
             predictions = model(meth, ent)
             
-            # 1. Calculate unreduced MSE loss
             base_loss = criterion(predictions, age)
             
-            # 2. Dynamic weighting: Heavily penalize errors on outlier ages.
-            # NOTE (Bug 2 Fix/Note): 'age' here is standardized (z-scored), meaning values near 0 
-            # represent the mean age, while outliers sit around +/- 1.5 to 2.0 standard deviations. 
-            # This formula gives average ages a baseline weight multiplier of 1.0, 
-            # scaling up to ~5.0 for extreme outlier age groups.
+            # Dynamic weighting: Heavily penalize errors on outlier ages.
             weights = 1.0 + (torch.abs(age) * 2.0) 
             
-            # 3. Apply weights and reduce
             loss = (base_loss * weights).mean()
             
             loss.backward()
@@ -60,6 +59,9 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, patience=
         avg_train_loss = np.mean(train_losses)
         val_mae = mean_absolute_error(val_targets, val_preds)
 
+        # 2. Step the scheduler based on current epoch's validation MAE
+        #scheduler.step(val_mae)
+
         status = "progress"
         if val_mae < best_val_mae:
             best_val_mae = val_mae
@@ -69,13 +71,13 @@ def train_model(model, train_loader, val_loader, epochs=100, lr=0.001, patience=
         else:
             epochs_without_improvement += 1
 
-        print(f"Epoch {epoch+1:03d}  | Loss: {avg_train_loss:<10.3f}   | Val MAE: {val_mae:<8.2f} yrs   | {status}")
+        print(f"Ep {epoch+1:03d} | {current_lr:.6f} | Loss: {avg_train_loss:<8.3f} | Val MAE: {val_mae:<9.2f} yrs | {status}")
 
         if epochs_without_improvement >= patience:
             print(f"\n[!] Early stopping triggered at epoch {epoch+1}! Validation error stopped improving.")
             break
 
-    print("-" * 65)
+    print("-" * 80)
     if best_weights is not None:
         model.load_state_dict(best_weights)
         print(f"[+] Loaded best model weights corresponding to lowest VALIDATION error "

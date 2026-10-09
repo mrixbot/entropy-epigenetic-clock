@@ -3,7 +3,7 @@ import torch.nn as nn
 
 class DualStreamEntropyClockNet(nn.Module):
     def __init__(self, input_dim):
-        # We now accept input_dim so the model scales to any dataset automatically
+
         super(DualStreamEntropyClockNet, self).__init__()
         
         # 1. Methylation Stream

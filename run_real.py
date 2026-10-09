@@ -1,5 +1,9 @@
 import torch
 import numpy as np
+import random
+#torch.manual_seed(42)
+#np.random.seed(42)
+#random.seed(42)
 from sklearn.model_selection import train_test_split
 import os
 
