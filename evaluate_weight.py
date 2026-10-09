@@ -16,8 +16,8 @@ from src.evaluate import evaluate_and_plot
 
 def main():
     # Set this to the name of the weight file you want to inspect
-    weight_file = "outputs/demo_locked_586_weights.pt" 
-    
+    weight_file = "weights/demo_locked_586_weights.pt" 
+
     print("==================================================")
     print(" ENTROPY CLOCK: STANDALONE WEIGHT EVALUATION")
     print("==================================================")
