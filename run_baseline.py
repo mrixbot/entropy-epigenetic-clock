@@ -20,7 +20,7 @@ def run_elasticnet_baseline():
     # Concatenate features to match the dual-stream input
     X = pd.concat([meth_df, ent_df], axis=1).values
     
-    # EXACT STRATIFIED SPLIT FROM run_real.py
+    # Exact STRATIFIED SPLIT FROM run_real.py
     indices = np.arange(len(meth_df))
     age_bins = np.digitize(y, bins=np.percentile(y, [25, 50, 75]))
     
