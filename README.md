@@ -2,57 +2,136 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c)
 ![Dataset](https://img.shields.io/badge/Dataset-GSE288139-green)
 ![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-research%20prototype-orange)
 
 # A Dual-Stream Deep Learning Epigenetic Clock
 
-This repository contains the source code for a novel deep learning framework designed to model epigenetic aging. Unlike traditional epigenetic clocks that rely solely on single-point methylation averages (beta values), this model simultaneously learns from **mean methylation** and stochastic **epigenetic noise (Shannon pattern entropy)** to predict chronological age.
+This repository contains the source code for a deep learning framework designed to model epigenetic aging. Unlike traditional epigenetic clocks that rely solely on single-point methylation averages (beta values), this model simultaneously learns from **mean methylation** and stochastic **epigenetic noise (Shannon pattern entropy)** to predict chronological age.
+
+The point of the architecture is not accuracy. It is that the model has to state, for every individual, how much of its prediction rests on each of the two signals. See [Known Limitations](#known-limitations) before quoting any number below.
 
 ## Biological Rationale
-As human cells age, DNA methylation patterns undergo stochastic changes. This epigenetic "noise" carries a profound, independent biological signal.
+As human cells age, DNA methylation patterns undergo stochastic changes. This epigenetic "noise" carries a biological signal that a per-site average cannot represent: two samples with identical mean methylation at a locus can differ completely in how consistent their individual reads are.
 
-To accurately capture this noise, this framework strictly utilizes **read-level sequencing data** (e.g., Targeted Bisulfite Sequencing, WGBS). By analyzing the distribution of multi-CpG combinations across individual DNA strands at a specific locus, we compute the true Shannon pattern entropy.
+Capturing that noise requires **read-level sequencing data** (e.g. Targeted Bisulfite Sequencing, WGBS), because the Shannon pattern entropy is computed over the distribution of multi-CpG combinations across individual DNA strands at a locus.
+
+**Note on provenance:** `src/entropy.py` implements this calculation from raw reads, but it was written to document the method and is *not* in the modelling path. The entropy values used for training are taken directly from the per-locus entropy matrix released with GSE288139.
 
 ## Model Architecture
-The core of this project is a custom multimodal deep neural network built in PyTorch.
+The core of this project is a multimodal neural network built in PyTorch (`src/model.py`).
 
-Instead of an early-fusion concatenation, this model utilizes a **Late-Fusion Gated Attention Mechanism**:
-1. **Parallel Encoders:** The input tensor is split perfectly in half. Methylation features and Entropy features are routed to isolated, parallel Multi-Layer Perceptrons (MLPs).
-2. **Latent Representation:** Each branch maps its input to a localized 64-dimensional embedding using Linear layers, LeakyReLU activations, and Dropout for regularization.
-3. **Gated Attention Fusion:** A dynamic gating layer analyzes both embeddings to calculate an attention score. The model dynamically weights the streams—learning exactly when a specific patient's prediction should rely on stochastic entropy versus deterministic methylation—before passing the fused vector to the final prediction head.
+Instead of an early-fusion concatenation, this model uses a **Late-Fusion Gated Attention Mechanism**:
+1. **Parallel Encoders:** Methylation features and entropy features are routed to isolated, parallel MLPs with no shared weights. Each is `Linear(1085 -> 256) -> BatchNorm -> ReLU -> Dropout(0.3) -> Linear(256 -> 128) -> ReLU`.
+2. **Latent Representation:** Each branch maps its input to a **128-dimensional** embedding.
+3. **Gated Attention Fusion:** The two embeddings are concatenated into a 256-vector and passed through `Linear(256 -> 128) -> Tanh -> Linear(128 -> 2) -> Softmax`. The two outputs are positive and sum to 1, so the fusion is a convex combination `z = w_m * m + w_e * e`. Because the gate is evaluated per sample, the split can be read off for each individual patient.
+4. **Regression Head:** `Linear(128 -> 64) -> BatchNorm -> ReLU -> Dropout(0.2) -> Linear(64 -> 1)`.
+
+Training uses Adam at a fixed learning rate of 0.001, a weighted MSE loss (`1 + 2|z|`, intended to stop the regressor collapsing to the cohort mean), and early stopping on validation MAE with patience 15. The `ReduceLROnPlateau` scheduler is constructed but its `step()` call is commented out, so the learning rate never changes.
 
 ---
 
 ## Experimental Results (Chan et al., GSE288139)
-Evaluated on real human buccal swab sequencing data, the optimized pipeline (incorporating leak-free scaling, target normalization, and validation-monitored early stopping) achieved state-of-the-art predictive performance:
-* **Mean Absolute Error (MAE):** `3.73 years`
-* **Pearson Correlation (r):** `0.963`
-* **Coefficient of Determination (R^2):** `0.916`
+All figures below come from the frozen checkpoint `weights/demo_locked_586_weights.pt`, reproduced via `evaluate_weight.py` on the held-out test partition (15 of 100 individuals, aged 7.2 to 84.4 years, 1,085 loci):
+
+* **Mean Absolute Error (MAE):** `5.86 years`
+* **Pearson Correlation (r):** `0.920`
+* **Coefficient of Determination (R^2):** `0.809`
+
+### Linear Baseline
+An `ElasticNetCV` fitted on the identical partition and the identical 2,170 features (`run_baseline.py`):
+
+* **MAE:** `3.95 years` · **RMSE:** `4.81` · **r:** `0.970`
+
+**The baseline is more accurate than the network on every metric.** This repository does not claim state-of-the-art prediction. What the dual-stream model provides and the elastic net cannot is the per-individual attention split below. Read the cross-validation section before relying on that split.
 
 ### Quantitative Biomarker Split (Gated Attention Analysis)
-Extracting the Gated Attention weights across the test cohort revealed a striking biological finding:
-* **Shannon Entropy Stream:** `63.0%` mean attention weight
-* **Methylation Stream:** `37.0%` mean attention weight
+Extracting the gated attention weights across the test cohort:
 
-*Conclusion:* The network autonomously prioritized stochastic epigenetic entropy over baseline methylation, confirming that entropy serves as a powerful, high-value biomarker of biological aging.
+* **Shannon Entropy Stream:** `62.9%` mean attention weight
+* **Methylation Stream:** `37.1%` mean attention weight
+
+The mean is not driven by outliers: **all 15 of 15** test individuals routed more than half their weight to entropy, over a range of 53.4% to 82.1% (SD 8.1 points).
+
+### Stream-Level Permutation
+Shuffling each stream's values across individuals and re-running inference:
+
+| Stream permuted | Single shuffle | 200 repeats (mean ± SD) |
+| --- | --- | --- |
+| Entropy | `+8.75 yrs` | `+5.79 ± 1.51` |
+| Methylation | `+3.75 yrs` | `+3.62 ± 1.12` |
+
+The **ordering** is reproducible; the magnitude is not. The single `+8.75` figure saved by the pipeline sits above the 97.5th percentile of the repeat distribution because the shuffle is drawn from an unseeded RNG. The honest ratio is roughly 1.6x, not 2.3x.
+
+*Interpretation:* on this cohort the network prioritised stochastic epigenetic entropy over mean methylation, and an independent sensitivity analysis agrees on the direction. This is a property of one fitted model on 15 test individuals, not an estimate of how much stochastic disorder contributes to aging.
+
+---
+
+## Five-Fold Cross-Validation (all 100 individuals)
+`run_kfold.py` was run, together with an extended version (`kfold_run.py`) that also fits `ElasticNetCV` on the same folds, records per-individual attention for every out-of-fold sample, and can move the missingness filter and KNN imputer inside each training fold. Folds are stratified on age quartile (random state 42); each held-out fold has 20 individuals; networks train on 64 individuals with 16 for early stopping. Five seeds per variant.
+
+| | Repo pipeline (filter + impute before split) | Filter + impute inside folds | Frozen checkpoint |
+| --- | --- | --- | --- |
+| Dual-stream MAE (yr) | 6.24 (seed means 5.99-6.52) | 5.91 (5.53-6.52) | 5.86 |
+| Dual-stream r | 0.878 | 0.892 | 0.920 |
+| ElasticNetCV MAE (yr) | 4.92 | 4.96 | 3.95 |
+| Mean entropy attention weight | 49.6% (46.3-53.1) | 43.3% (38.6-47.1) | 62.9% |
+| Individuals routing >50% to entropy | 48% | 36% | 100% (15/15) |
+| Permutation cost, entropy / methylation (yr) | +3.28 / +4.39 | +3.06 / +5.20 | +8.75 / +3.75 (single shuffle) |
+
+(Up to 100 epochs and 100 permutations per fold. An earlier run at the repo default of 50 epochs and 20 permutations gave the same picture: entropy weight 47.8% / 48.5%, methylation permutation costlier in 9 of 10 seed-variant combinations.)
+
+What this means:
+* **Accuracy:** the frozen checkpoint's 5.86 years is inside the cross-validated range, so selecting it on test error did not inflate the error much. The elastic net beats the network in every fold.
+* **Attention routing:** the 62.9% entropy share did not reproduce. None of the ten seed means reaches it, and the data are consistent with roughly comparable reliance on the two streams, which is where the original hypothesis started.
+* **Permutation:** permuting methylation costs more error than permuting entropy in all ten seed-variant combinations, the reverse of the frozen checkpoint.
+* The five seeds vary initialisation and batch order but not the fold assignment, so the spread understates partition-to-partition variation.
+
+---
+
+## Known Limitations
+These are the reasons the numbers above are optimistic. They are listed here rather than buried because every downstream result inherits them.
+
+* **The checkpoint was selected on the test set.** `run_real.py` does not seed its RNGs (the seed lines are commented out) and `auto_search.py` reruns training until test MAE falls below a threshold. `5.86` is a favourable draw from a distribution of restarts, not an unbiased estimate of generalisation. The attention weights and permutation results inherit this.
+* **Preprocessing precedes the split.** The missingness filter (<= 20% missing) and the `KNNImputer` in `src/process_real_data.py` are applied to all 100 individuals before partitioning. Feature scalers *are* fitted on the training partition alone, so the leakage is confined to filtering and imputation — but it is real, and it affects the baseline too.
+* **Predictions are compressed towards the mean.** Regression of predicted on actual age gives slope 0.679, intercept +12.63. The younger half is overpredicted by 4.78 years on average and the older half underpredicted by 6.22. The `1 + 2|z|` loss weighting did not prevent this.
+* **The locus ranking is nearly flat.** Entropy-encoder first-layer scores have a coefficient of variation of 4.2%; the top 50 loci hold 5.01% of the summed score against 4.61% under a uniform distribution. Rank ordering within the leading group carries little information, so `outputs/mapped_entropy_genes.csv` is exploratory output and nothing more.
+* **`outputs/god_seed_metrics.txt` is from a superseded run.** It records MAE 3.92 / r 0.975 and an attention split near 50/50, which contradicts the frozen checkpoint. It is kept as a record of an earlier restart and should not be cited.
+* **The attention split does not survive cross-validation.** See the next section: over five-fold CV the entropy weight averages 43-50%, not 62.9%, and the permutation ordering reverses. The frozen checkpoint's routing should be treated as a favourable draw.
+* No measure of biological age, morbidity or mortality was available. **This model is not validated for clinical, forensic or diagnostic use.**
 
 ---
 
 ## Repository Structure
 ```text
-entropy_clock/
+entropy_clock_V2/
 ├── data/
-│   ├── raw/                # Raw read-level datasets (e.g., GSE288139)
-│   ├── processed/          # Cleaned, extracted feature tensors
+│   ├── raw/                # GSE288139 avgmeth, entropy and series matrices (.gz)
+│   ├── processed/          # clean_meth.csv, clean_entropy.csv, clean_ages.csv
 │   └── splits/             # Train/Val/Test IDs
-├── outputs/                # Generated scatter plots and biomarker contribution charts
+├── outputs/                # Figures, checkpoints from restarts, ranked loci, mapped genes
+├── weights/
+│   └── demo_locked_586_weights.pt   # The frozen checkpoint all reported results use
 ├── src/
-│   ├── data_loader.py      # PyTorch Dataset wrappers and leak-free scaling
-│   ├── entropy.py          # Read-level mathematical feature extraction
-│   ├── evaluate.py         # Metrics, regression plotting, and attention/SHAP analysis
+│   ├── data_loader.py      # PyTorch Dataset wrappers and train-only scaling
+│   ├── entropy.py          # Read-level entropy calculation (documentation only, not in pipeline)
+│   ├── evaluate.py         # Metrics, regression plotting, attention and permutation analysis
+│   ├── fetch_data.py       # GEO supplementary file retrieval
+│   ├── fetch_ages.py       # Age metadata parsing from the series matrix
 │   ├── model.py            # Dual-stream attention-fusion architecture
-│   └── train.py            # Gradient descent training loop with validation & Early Stopping
-├── run_real.py             # Master orchestrator for real biological pipeline
-├── run_synthetic.py        # Master orchestrator for synthetic pilot validation
+│   ├── process_real_data.py# Cleaning, missingness filter, KNN imputation, stratified split
+│   └── train.py            # Training loop with early stopping
+├── run_real.py             # Master orchestrator for the real biological pipeline
+├── run_synthetic.py        # Synthetic pilot (currently broken: passes an unexpected shap_path arg)
+├── run_baseline.py         # ElasticNetCV baseline on the identical split
+├── run_kfold.py            # Original stratified 5-fold CV harness (unseeded; preprocessing outside the folds)
+├── kfold_run.py            # 5-fold CV used for the reported results: seeds, ElasticNetCV per fold, per-person attention, optional in-fold preprocessing
+├── docs/                   # Project report, IEEE-format paper (PDF + LaTeX source)
+├── evaluate_weight.py      # Reproduces all reported results from the frozen checkpoint
+├── auto_search.py          # Reruns training until test MAE clears a threshold
+├── extract_pathways.py     # Ranks loci by entropy-encoder first-layer weight magnitude
+├── map_genes.py            # Maps ranked genomic windows to symbols via the Ensembl REST API
+├── fetch_annotation.py     # Annotation helper
+├── inspect_redunt.py       # Redundancy inspection of the feature matrices
 ├── requirements.txt        # Python dependencies
 └── .gitignore
 ```
@@ -66,18 +145,46 @@ entropy_clock/
 pip install -r requirements.txt
 ```
 
-### 2. Execute Synthetic Pilot (Validation):
+### 2. Reproduce the reported results (recommended):
 ```bash
-python run_synthetic.py
+python evaluate_weight.py
+```
+This loads `weights/demo_locked_586_weights.pt`, rebuilds the identical stratified split, and runs inference once. It is the only entry point that reproduces the numbers in this README.
+
+### 3. Fit the linear baseline:
+```bash
+python run_baseline.py
 ```
 
-### 3. Execute Real Biological Pipeline:
+### 4. Retrain from scratch (will not reproduce 5.86):
 ```bash
 python run_real.py
 ```
+The RNGs are unseeded, so each run lands somewhere different. Seed them before drawing any conclusion from a single run.
 
-### 4. View the Results:
-Check the `outputs/` folder for the *Predicted vs. Actual* regression plot (`real_predicted_vs_actual.png`) and the *Dual-Stream Biomarker Contribution Analysis* (`real_shap_summary.png`).
+### 5. Cross-validation (all 100 individuals):
+```bash
+python kfold_run.py A 0     # protocol A: repo CSVs (filter + impute before the split); second argument is the seed
+python kfold_run.py B 0     # protocol B: filter + KNN imputation inside each fold (needs data/raw)
+```
+Run seeds 0 to 4 for each protocol to reproduce the tables above. Each run trains five folds for up to 100 epochs and permutes each stream 100 times per fold, so budget several minutes per seed on a CPU.
+
+### 6. Locus ranking and gene mapping:
+```bash
+python extract_pathways.py     # writes outputs/top_entropy_cpgs.csv
+python map_genes.py            # writes outputs/mapped_entropy_genes.csv
+```
+
+### 7. View the results:
+Check the `outputs/` folder for the *Predicted vs. Actual* regression plot (`eval_predicted_vs_actual.png`), the attention summary (`eval_attention_summary.png`) and the stream-level permutation chart (`eval_stream_importance.png`).
+
+## Write-up
+The full project report and an IEEE-format paper are in [`docs/`](docs/):
+
+* [`docs/Entropy_Clock_Project_Report.pdf`](docs/Entropy_Clock_Project_Report.pdf): the 40-page project report.
+* [`docs/Entropy_Clock_IEEE_Paper.pdf`](docs/Entropy_Clock_IEEE_Paper.pdf): the 5-page journal-format paper (LaTeX source in [`docs/ieee_paper/`](docs/ieee_paper/), built with `IEEEtran`).
 
 ## Interpretability
-This framework inherently resists the "black box" nature of deep learning. By extracting instance-specific attention weights and incorporating robust post-hoc explainability, the model offers transparent attribution into how deterministic methylation and stochastic entropic drift jointly drive biological aging.
+The attention weight is an output of the forward pass, not a post-hoc attribution: it is produced on the way to the prediction and requires no surrogate model to recover. That is the one thing this architecture offers that a penalised linear model does not.
+
+It is also the limit of what it offers. The locus-level attribution in `extract_pathways.py` sums absolute first-layer weights, which ignores every downstream transformation including the attention module itself, and never evaluates the weights against data. The gene symbols it produces describe the network's parameterisation, not a measured response to the inputs, and no enrichment claim should be built on them without a background matched to the targeted panel.

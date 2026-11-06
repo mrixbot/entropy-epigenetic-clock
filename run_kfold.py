@@ -9,14 +9,20 @@ from src.model import DualStreamEntropyClockNet
 from src.train import train_model
 
 def run_cross_validation(k=5, epochs=50, inner_val_fraction=0.2):
+    """k-fold CV: every patient gets held out exactly once.
+
+    Worth preferring over run_real.py's single 15-patient test split, which is
+    small enough that one patient moves the MAE by ~0.4 years. Still inherits the
+    leakage from process_real_data.py, since the filtering and imputation already
+    happened over all 100 patients before this script loads the CSVs.
+    """
     print("=" * 50)
     print(f" ENTROPY CLOCK: {k}-FOLD CROSS-VALIDATION PIPELINE (100% LEAK-FREE)")
     print("=" * 50)
 
-    # 1. Load Raw Data
     meth_df, ent_df, ages_df = load_raw_real_data()
     input_dim = len(meth_df.columns)
-    
+
     ages_raw = ages_df['Age'].values
     indices = np.arange(len(meth_df))
     age_bins = np.digitize(ages_raw, bins=np.percentile(ages_raw, [25, 50, 75]))
@@ -29,17 +35,20 @@ def run_cross_validation(k=5, epochs=50, inner_val_fraction=0.2):
     for fold, (train_idx, test_idx) in enumerate(skf.split(indices, age_bins)):
         print(f"\n--- [FOLD {fold+1}/{k}] ---")
 
-        # 2. Stratify Inner Train/Val
+        # Carve a validation set out of the training fold for early stopping,
+        # so the test fold stays untouched until scoring
         inner_train_idx, inner_val_idx = train_test_split(
             train_idx, test_size=inner_val_fraction, random_state=42, stratify=age_bins[train_idx]
         )
         print(f"Inner-train: {len(inner_train_idx)}, Inner-val: {len(inner_val_idx)}, Held-out test: {len(test_idx)}")
 
-        # 3. Create isolated dataloaders for this fold
+        # Scalers refit per fold
         fold_train_loader, fold_inner_val_loader, fold_test_loader, age_scaler = create_scaled_dataloaders(
             meth_df, ent_df, ages_df, inner_train_idx, inner_val_idx, test_idx
         )
 
+        # Fresh model each fold -- reusing one would carry the previous fold's
+        # test patients in its weights
         model = DualStreamEntropyClockNet(input_dim=input_dim)
         model.age_scaler = age_scaler
 
@@ -75,6 +84,8 @@ def run_cross_validation(k=5, epochs=50, inner_val_fraction=0.2):
 
         print(f"Fold {fold+1} Results (genuinely held-out) -> MAE: {mae:.2f} yrs | r: {r:.3f} | R2: {r2:.3f}")
 
+    # SD across folds is the useful bit -- shows how much the single-split
+    # number from run_real.py could have moved by luck
     print("\n" + "=" * 50)
     print(f" CROSS-VALIDATION SUMMARY ({k} FOLDS, LEAK-FREE)")
     print("=" * 50)

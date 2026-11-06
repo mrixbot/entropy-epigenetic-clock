@@ -6,6 +6,7 @@ import os
 
 
 def fetch_and_clean_ages():
+    """Pull patient ages out of the GSE288139 series matrix header."""
     url = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE288nnn/GSE288139/matrix/GSE288139_series_matrix.txt.gz"
     save_path = "data/raw/GSE288139_series_matrix.txt.gz"
 
@@ -21,13 +22,9 @@ def fetch_and_clean_ages():
         lines = f.readlines()
 
     sample_ids = []
-    # CHANGED: ages is now a dict keyed by POSITION (column index), not a
-    # separately-grown list. Previously, sample_ids and ages were built as
-    # two independent lists -- if even one sample's age field failed to
-    # parse, every age after it would silently shift by one position,
-    # attaching the wrong age to the wrong patient with no error raised.
-    # Building by position first, then converting to a fixed-length list
-    # (with NaN for anything unparsed), makes that class of bug impossible.
+    # Keyed by column position rather than appended to a list: if one sample's age
+    # field fails to parse, appending would shift every later age by one and quietly
+    # attach the wrong age to the wrong patient.
     ages_by_position = {}
 
     for line in lines:
@@ -39,10 +36,8 @@ def fetch_and_clean_ages():
             raw_chars = line.strip().split('\t')[1:]
             for position, char in enumerate(raw_chars):
                 if 'age' in char.lower():
-                    # CHANGED: r'\d+' truncated decimals (7.2 -> "7").
-                    # r'\d+\.?\d*' captures the full number including any
-                    # fractional part. Chan et al.'s real ages range from
-                    # 7.2 to 84.4 years, so this matters for every sample.
+                    # \d+ alone truncated 7.2 to "7". Ages here run 7.2-84.4 so the
+                    # decimal matters.
                     match = re.search(r'\d+\.?\d*', char)
                     if match:
                         ages_by_position[position] = float(match.group())
@@ -51,8 +46,7 @@ def fetch_and_clean_ages():
         print("[!] Could not parse the metadata correctly. The formatting might be non-standard.")
         return
 
-    # Build ages aligned by position -- any sample whose age didn't parse
-    # gets NaN instead of silently shifting everyone after it
+    # NaN for anything that didn't parse, so the gap stays visible
     ages = [ages_by_position.get(i, float('nan')) for i in range(len(sample_ids))]
 
     df = pd.DataFrame({'Age': ages}, index=sample_ids)

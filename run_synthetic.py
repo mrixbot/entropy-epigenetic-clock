@@ -10,18 +10,17 @@ def main():
     print(" ENTROPY CLOCK: SYNTHETIC PROOF OF CONCEPT")
     print("==================================================")
 
-    # 1. Load the synthetic dummy data -- now three isolated loaders instead of two
     train_loader, val_loader, test_loader, input_dim, feature_names = get_synthetic_dataloaders()
 
-    # 2. Initialize the architecture
     print(f"\n[*] Initializing Dual-Stream Architecture for {input_dim} loci...")
     model = DualStreamEntropyClockNet(input_dim=input_dim)
 
-    # 3. Train the model -- checkpoint selection uses val_loader, not test_loader
+    # Checkpoint selection uses val_loader, so test stays clean here
     print("\n[*] Commencing training loop on synthetic data...")
     trained_model = train_model(model, train_loader, val_loader, epochs=50)
 
-    # 4. Evaluate on the held-out test set
+    # BROKEN: evaluate_and_plot takes plot_path / attention_path / importance_path.
+    # shap_path is left over from an older signature and will raise TypeError.
     print("\n[*] Evaluating final model on held-out test set...")
     evaluate_and_plot(trained_model, test_loader, feature_names,
                        plot_path="outputs/synthetic_predicted_vs_actual.png",

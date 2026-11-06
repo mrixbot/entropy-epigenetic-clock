@@ -5,8 +5,10 @@ class DualStreamEntropyClockNet(nn.Module):
     def __init__(self, input_dim):
 
         super(DualStreamEntropyClockNet, self).__init__()
-        
-        # 1. Methylation Stream
+
+        # Two encoders with identical shape but separate weights. Keeping them
+        # separate is the whole point: if meth and entropy were concatenated at
+        # the input there'd be no boundary left to measure the split at.
         self.meth_stream = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.BatchNorm1d(256),
@@ -15,8 +17,7 @@ class DualStreamEntropyClockNet(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU()
         )
-        
-        # 2. Entropy Stream
+
         self.ent_stream = nn.Sequential(
             nn.Linear(input_dim, 256),
             nn.BatchNorm1d(256),
@@ -25,17 +26,16 @@ class DualStreamEntropyClockNet(nn.Module):
             nn.Linear(256, 128),
             nn.ReLU()
         )
-        
-        # 3. Late-Fusion Gated Attention Mechanism
-        # Learns which stream to trust more based on the patient
+
+        # Gate: takes both embeddings, returns one weight per stream.
+        # Softmax so the two sum to 1 and can be read as percentages.
         self.attention = nn.Sequential(
-            nn.Linear(256, 128), # 128 from meth + 128 from ent
+            nn.Linear(256, 128),  # 128 meth + 128 ent
             nn.Tanh(),
-            nn.Linear(128, 2),   # 2 weights: one for meth, one for ent
+            nn.Linear(128, 2),
             nn.Softmax(dim=1)
         )
-        
-        # 4. Final Regressor
+
         self.regressor = nn.Sequential(
             nn.Linear(128, 64),
             nn.BatchNorm1d(64),
@@ -45,21 +45,19 @@ class DualStreamEntropyClockNet(nn.Module):
         )
 
     def forward(self, meth, ent):
-        # Pass data through individual biological streams
         m_out = self.meth_stream(meth)
         e_out = self.ent_stream(ent)
-        
-        # Calculate attention weights dynamically
+
+        # Weights are computed per sample, so the split can differ between people
         combined = torch.cat([m_out, e_out], dim=1)
         attn_weights = self.attention(combined)
-        
-        # Split weights for each stream
+
         w_m = attn_weights[:, 0].unsqueeze(1)
         w_e = attn_weights[:, 1].unsqueeze(1)
-        
-        # Late Fusion: Weighted sum of both streams based on attention
+
+        # Convex combination, not concatenation -- keeps the output 128-dim
         fused = (m_out * w_m) + (e_out * w_e)
-        
-        # Predict Chronological Age
+
+        # Output is standardised age; caller inverts the scaler to get years
         age_pred = self.regressor(fused)
         return age_pred
