@@ -2,7 +2,6 @@
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c)
 ![Dataset](https://img.shields.io/badge/Dataset-GSE288139-green)
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Status](https://img.shields.io/badge/Status-research%20prototype-orange)
 
 # A Dual-Stream Deep Learning Epigenetic Clock
 
