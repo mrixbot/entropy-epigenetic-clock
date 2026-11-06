@@ -125,7 +125,6 @@ entropy_clock_V2/
 ├── run_kfold.py            # Original 5-fold CV script (unseeded, preprocessing outside the folds)
 ├── run_cv_seeds.py         # 5-fold CV over several seeds, repo and strict variants (50 epochs, 20 permutations); gives the CV tables in the report and paper
 ├── kfold_run.py            # Repeat of the CV with 100 epochs and 100 permutations (protocols A and B)
-├── docs/                   # Project report and IEEE-format paper (PDF + LaTeX source)
 ├── evaluate_weight.py      # Reproduces all reported results from the saved checkpoint
 ├── auto_search.py          # Retrains until test MAE is below a threshold
 ├── extract_pathways.py     # Ranks loci by size of the entropy encoder's first-layer weights
@@ -178,12 +177,6 @@ python map_genes.py            # writes outputs/mapped_entropy_genes.csv
 
 ### 7. View the results:
 Look in the `outputs/` folder for the predicted vs actual plot (`eval_predicted_vs_actual.png`), the attention summary (`eval_attention_summary.png`) and the permutation chart (`eval_stream_importance.png`).
-
-## Write-up
-The project report and a short IEEE-format paper are in [`docs/`](docs/):
-
-* [`docs/Entropy_Clock_Project_Report.pdf`](docs/Entropy_Clock_Project_Report.pdf): the 40-page project report.
-* [`docs/Entropy_Clock_IEEE_Paper.pdf`](docs/Entropy_Clock_IEEE_Paper.pdf): the 5-page paper (LaTeX source in [`docs/ieee_paper/`](docs/ieee_paper/), uses `IEEEtran`).
 
 ## Interpretability
 The attention weight comes straight out of the forward pass, so there is no need for a separate explanation model. This is the one thing the architecture offers that a penalised linear model does not.
