@@ -67,23 +67,23 @@ The **ordering** is reproducible; the magnitude is not. The single `+8.75` figur
 ---
 
 ## Five-Fold Cross-Validation (all 100 individuals)
-`run_kfold.py` was run, together with an extended version (`kfold_run.py`) that also fits `ElasticNetCV` on the same folds, records per-individual attention for every out-of-fold sample, and can move the missingness filter and KNN imputer inside each training fold. Folds are stratified on age quartile (random state 42); each held-out fold has 20 individuals; networks train on 64 individuals with 16 for early stopping. Five seeds per variant.
+`run_kfold.py` was run in an extended form (`run_cv_seeds.py`, which loops over seeds, fits `ElasticNetCV` on the same folds and adds a variant that moves the missingness filter and KNN imputer inside each training fold). Folds are stratified on age quartile (random state 42); each held-out fold has 20 individuals; networks train on 64 individuals with 16 for early stopping. Five seeds per variant, up to 50 epochs (the `run_kfold.py` default), each stream permuted 20 times per fold. These are the numbers used in the report, paper and slides.
 
 | | Repo pipeline (filter + impute before split) | Filter + impute inside folds | Frozen checkpoint |
 | --- | --- | --- | --- |
-| Dual-stream MAE (yr) | 6.24 (seed means 5.99-6.52) | 5.91 (5.53-6.52) | 5.86 |
-| Dual-stream r | 0.878 | 0.892 | 0.920 |
+| Dual-stream MAE (yr) | 5.97 (seed means 5.72-6.12) | 6.25 (5.98-7.01) | 5.86 |
+| Dual-stream r | 0.902 | 0.889 | 0.920 |
 | ElasticNetCV MAE (yr) | 4.92 | 4.96 | 3.95 |
-| Mean entropy attention weight | 49.6% (46.3-53.1) | 43.3% (38.6-47.1) | 62.9% |
-| Individuals routing >50% to entropy | 48% | 36% | 100% (15/15) |
-| Permutation cost, entropy / methylation (yr) | +3.28 / +4.39 | +3.06 / +5.20 | +8.75 / +3.75 (single shuffle) |
+| Mean entropy attention weight | 47.8% (42.3-52.6) | 48.5% (38.5-62.6) | 62.9% |
+| Individuals routing >50% to entropy | 43% | 43% | 100% (15/15) |
+| Permutation cost, entropy / methylation (yr) | +3.38 / +4.57 | +3.52 / +4.18 | +8.75 / +3.75 (single shuffle) |
 
-(Up to 100 epochs and 100 permutations per fold. An earlier run at the repo default of 50 epochs and 20 permutations gave the same picture: entropy weight 47.8% / 48.5%, methylation permutation costlier in 9 of 10 seed-variant combinations.)
+**Note on epochs.** `run_real.py` (which produced the frozen checkpoint) allows up to 100 epochs and `run_kfold.py` uses 50. Early stopping (patience 15) ends training at a median of epoch 35 (range 22 to 71 over 25 fold trainings), so the cap bound in only one of them and the choice barely matters. As a robustness check, `kfold_run.py` repeats both variants at up to 100 epochs with 100 permutations per fold: MAE 6.24 and 5.91, entropy weight 49.6% and 43.3%, methylation permutation costlier in all ten seed-variant combinations. The differences from the table above are seed-level noise; the conclusions are the same.
 
 What this means:
 * **Accuracy:** the frozen checkpoint's 5.86 years is inside the cross-validated range, so selecting it on test error did not inflate the error much. The elastic net beats the network in every fold.
-* **Attention routing:** the 62.9% entropy share did not reproduce. None of the ten seed means reaches it, and the data are consistent with roughly comparable reliance on the two streams, which is where the original hypothesis started.
-* **Permutation:** permuting methylation costs more error than permuting entropy in all ten seed-variant combinations, the reverse of the frozen checkpoint.
+* **Attention routing:** the 62.9% entropy share did not reproduce. The repo-pipeline seed means run from 42.3% to 52.6% (one strict-variant seed reached 62.6%), and the data are consistent with roughly comparable reliance on the two streams, which is where the original hypothesis started.
+* **Permutation:** permuting methylation costs more error than permuting entropy in all five seeds of the repo pipeline and four of five of the strict variant, the reverse of the frozen checkpoint.
 * The five seeds vary initialisation and batch order but not the fold assignment, so the spread understates partition-to-partition variation.
 
 ---
@@ -124,7 +124,8 @@ entropy_clock_V2/
 ├── run_synthetic.py        # Synthetic pilot (currently broken: passes an unexpected shap_path arg)
 ├── run_baseline.py         # ElasticNetCV baseline on the identical split
 ├── run_kfold.py            # Original stratified 5-fold CV harness (unseeded; preprocessing outside the folds)
-├── kfold_run.py            # 5-fold CV used for the reported results: seeds, ElasticNetCV per fold, per-person attention, optional in-fold preprocessing
+├── run_cv_seeds.py         # 5-fold CV over seeds ('repo' and 'strict' variants, 50 epochs, 20 permutations): source of the CV tables in the report, paper and this README
+├── kfold_run.py            # Robustness repeat of the CV at 100 epochs and 100 permutations (protocols A and B)
 ├── docs/                   # Project report, IEEE-format paper (PDF + LaTeX source)
 ├── evaluate_weight.py      # Reproduces all reported results from the frozen checkpoint
 ├── auto_search.py          # Reruns training until test MAE clears a threshold
@@ -164,10 +165,11 @@ The RNGs are unseeded, so each run lands somewhere different. Seed them before d
 
 ### 5. Cross-validation (all 100 individuals):
 ```bash
-python kfold_run.py A 0     # protocol A: repo CSVs (filter + impute before the split); second argument is the seed
-python kfold_run.py B 0     # protocol B: filter + KNN imputation inside each fold (needs data/raw)
+python run_cv_seeds.py repo 0,1,2,3,4      # headline tables: repo pipeline, 50 epochs, 20 permutations per fold
+python run_cv_seeds.py strict 0,1,2,3,4    # filter + KNN imputation inside each fold (needs data/raw)
+python kfold_run.py A 0                    # robustness repeat: 100 epochs, 100 permutations; A = repo CSVs, B = in-fold preprocessing, second argument = seed
 ```
-Run seeds 0 to 4 for each protocol to reproduce the tables above. Each run trains five folds for up to 100 epochs and permutes each stream 100 times per fold, so budget several minutes per seed on a CPU.
+Each `run_cv_seeds.py` seed takes under a minute on a CPU and writes `res_<variant>.json`; run `kfold_run.py` for seeds 0 to 4 and both protocols to repeat the robustness check.
 
 ### 6. Locus ranking and gene mapping:
 ```bash
