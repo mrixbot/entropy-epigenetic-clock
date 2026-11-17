@@ -142,25 +142,30 @@ entropy_clock_V2/
 ```bash
 pip install -r requirements.txt
 ```
+### 2. Fetch the data (required — `data/` is not in the repo):
 
-### 2. Reproduce the reported results (recommended):
+python src/fetch_data.py
+python src/fetch_ages.py
+python src/process_real_data.py
+
+### 3. Reproduce the reported results (recommended):
 ```bash
 python evaluate_weight.py
 ```
 This loads `weights/demo_locked_586_weights.pt`, rebuilds the same stratified split and runs the model once. It is the only script that reproduces the numbers in this README.
 
-### 3. Fit the linear baseline:
+### 4. Fit the linear baseline:
 ```bash
 python run_baseline.py
 ```
 
-### 4. Retrain from scratch (will not give 5.86):
+### 5. Retrain from scratch (will not give 5.86):
 ```bash
 python run_real.py
 ```
 The seeds are not set, so every run gives a different result. Set them first if you want to compare runs.
 
-### 5. Cross-validation (all 100 people):
+### 6. Cross-validation (all 100 people):
 ```bash
 python run_cv_seeds.py repo 0,1,2,3,4      # main tables: repo pipeline, 50 epochs, 20 permutations per fold
 python run_cv_seeds.py strict 0,1,2,3,4    # filter + KNN imputation inside each fold (needs data/raw)
@@ -168,13 +173,13 @@ python kfold_run.py A 0                    # repeat with 100 epochs, 100 permuta
 ```
 One `run_cv_seeds.py` seed takes under a minute on a CPU and writes `res_<variant>.json`. For the repeat, run `kfold_run.py` for seeds 0 to 4 with both protocols.
 
-### 6. Locus ranking and gene mapping:
+### 7. Locus ranking and gene mapping:
 ```bash
 python extract_pathways.py     # writes outputs/top_entropy_cpgs.csv
 python map_genes.py            # writes outputs/mapped_entropy_genes.csv
 ```
 
-### 7. View the results:
+### 8. View the results:
 Look in the `outputs/` folder for the predicted vs actual plot (`eval_predicted_vs_actual.png`), the attention summary (`eval_attention_summary.png`) and the permutation chart (`eval_stream_importance.png`).
 
 ## Interpretability
